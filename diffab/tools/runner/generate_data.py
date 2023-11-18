@@ -98,48 +98,64 @@ def generate_data(args):
     config, config_name = load_config(args.config)
     seed_all(args.seed if args.seed is not None else config.sampling.seed)
 
-    # # Load sabdab_summary json file using json library
-    # sabdab_entries = []
-    # with open(args.json_path) as f:
-    #     # loop through each line of f as a json file
-    #     for line in f:
-    #         sabdab_data = json.loads(line)
-    #         sabdab_entries.append(sabdab_data)
-
+    # Load sabdab_summary json file using json library
+    sabdab_entries = []
+    with open(args.json_path) as f:
+        # loop through each line of f as a json file
+        for line in f:
+            sabdab_data = json.loads(line)
+            sabdab_entries.append(sabdab_data)
 
     # Loop through each sabdab entry in variable sabdab_entries
-    i = 1
+    j = 1
     # len_sabdab_entries = len(sabdab_entries)
     log_dir = get_new_log_dir(
                 os.path.join(args.out_root),
                 prefix='generate_data',
             )
     logger = get_logger('sample', log_dir)
-    # find number of pdb files in args.pdb_data
-    len_pdb_files = len(os.listdir(args.pdb_data))
-    # loop every pdb file in args.pdb_data
-    for pdb_file in os.listdir(args.pdb_data):
-        if i > 1:
-            break
-        pdb_path_ = args.pdb_data + pdb_file
-        # split pdb_id from pdb_file deleting the extension ".pdb"
-        pdb_id = os.path.splitext(pdb_file)[0]
+    # find number of pdb files in sabdab_entries
+    len_pdb_files = len(sabdab_entries)
+    # loop every pdb file in sabdab_entries
+    final_sabdab_entries = []
+    generated_sabdab_entries = []
+    for sabdab_data in sabdab_entries:
+        if sabdab_data['heavy_chain'] == '' or sabdab_data['light_chain'] == '' or sabdab_data['antigen_chains'] == '':
+            continue
+        pdb_id = sabdab_data['pdb']
+        pdb_path_ = args.pdb_data + pdb_id + ".pdb"
         # Structure loading
         data_id = os.path.basename(pdb_path_)
         if args.no_renumber:
             pdb_path = pdb_path_
         else:
             in_pdb_path = pdb_path_
-            out_pdb_path = os.path.splitext(in_pdb_path)[0] + '_chothia.pdb'
-            heavy_chains, light_chains = renumber_antibody(in_pdb_path, out_pdb_path)
+            # out_pdb_path = os.path.splitext(in_pdb_path)[0] + '_chothia.pdb'
+            # create folder 'clothia' in args.pdb_path
+            pdb_clothia_path = args.pdb_data + "chothia/"
+            # create pdb_clotia_path if it does not exist
+            if not os.path.exists(pdb_clothia_path):
+                os.makedirs(pdb_clothia_path)
+            # out_pdb_path is path of data/pdb_clothia
+            out_pdb_path = pdb_clothia_path + pdb_id + "_chothia.pdb"
+            try:
+                heavy_chains, light_chains = renumber_antibody(in_pdb_path, out_pdb_path)
+            except:
+                print("Error in renumbering the antibody " + pdb_id)
+                continue                
             pdb_path = out_pdb_path
 
             # if args.heavy is None and len(heavy_chains) > 0:
             #     args.heavy = heavy_chains[0]
             # if args.light is None and len(light_chains) > 0:
             #     args.light = light_chains[0]
-            heavy_chain = heavy_chains[0]
-            light_chain = light_chains[0]
+            # heavy_chain = heavy_chains[0]
+            # light_chain = light_chains[0]
+            heavy_chain = sabdab_data['heavy_chain']
+            light_chain = sabdab_data['light_chain']
+            print(heavy_chain)
+            print(light_chain)
+        
         # if args.heavy is None and args.light is None:
         if heavy_chain is None and light_chain is None:
             raise ValueError("Neither heavy chain id (--heavy) or light chain id (--light) is specified.")
@@ -151,10 +167,14 @@ def generate_data(args):
             'light_id': light_chain,
         })
 
-        # Logging
-        structure_ = get_structure()
-        structure_id = structure_['id']
-        tag_postfix = '_%s' % args.tag if args.tag else ''
+        try:
+            # Logging
+            structure_ = get_structure()
+            structure_id = structure_['id']
+            tag_postfix = '_%s' % args.tag if args.tag else ''
+        except:
+            print("Error in structure_ = get_structure()")
+            continue
         # log_dir = get_new_log_dir(
         #     os.path.join(args.out_root, config_name + tag_postfix), 
         #     prefix=data_id
@@ -208,6 +228,10 @@ def generate_data(args):
             logger.info(f"Start sampling for: {variant['tag']}")
 
             save_pdb(data_native, os.path.join(log_dir, variant['tag'], pdb_id + "_REF" + ".pdb"))       # w/  OpenMM minimization
+            tmp_data = sabdab_data.copy()
+            tmp_data['pdb'] = pdb_id + "_REF"
+            tmp_data['pdb_data_path'] = os.path.join(log_dir, variant['tag'], pdb_id + "_REF" + ".pdb")
+            generated_sabdab_entries.append(tmp_data)
 
             data_cropped = inference_tfm(
                 copy.deepcopy(variant['data'])
@@ -278,6 +302,13 @@ def generate_data(args):
                             'mask_heavyatom': mask_ha,
                             'pos_heavyatom': pos_ha,
                         }, path=save_path)
+
+                        tmp_data = sabdab_data.copy()
+                        tmp_data['pdb'] = pdb_id + "_" + str(count) + "_" + str(id_)
+                        tmp_data['pdb_data_path'] = save_path
+                        # at the current moment the sequence is not updated!!! Need to be treated at the error prediction model
+                        generated_sabdab_entries.append(tmp_data)
+
                         # save_pdb({
                         #     'chain_nb': data_cropped['chain_nb'],
                         #     'chain_id': data_cropped['chain_id'],
@@ -290,11 +321,27 @@ def generate_data(args):
                         # }, path=os.path.join(log_dir, variant['tag'], '%04d_patch.pdb' % (count, )))
                         count += 1
 
-            logger.info('Finished.\n')
-            print(str(i) + "/" + str(len_pdb_files))
-            i = i+1
-            j = j+1
+        final_sabdab_entries.append(sabdab_data)
 
+        logger.info('Finished.\n')
+        print(str(j) + "/" + str(len_pdb_files))
+        j = j+1
+
+    # save final_sabdab_entries to json file
+    out_path = args.json_path[:-5] + "_final.json"
+    fout = open(out_path, 'w')
+    for item in final_sabdab_entries:
+        item_str = json.dumps(item)
+        fout.write(f'{item_str}\n')
+    fout.close()
+
+    # save generated_sabdab_entries to json file
+    out_path = args.json_path[:-5] + "_generated.json"
+    fout = open(out_path, 'w')
+    for item in generated_sabdab_entries:
+        item_str = json.dumps(item)
+        fout.write(f'{item_str}\n')
+    fout.close()
 
 def args_from_cmdline():
     parser = argparse.ArgumentParser()
@@ -302,7 +349,7 @@ def args_from_cmdline():
     # parser.add_argument('--heavy', type=str, default=None, help='Chain id of the heavy chain.')
     # parser.add_argument('--light', type=str, default=None, help='Chain id of the light chain.')
     parser.add_argument('pdb_data', type=str, help='Clothia folder with antigen-antibody complexes')
-    # parser.add_argument('json_path', type=str)
+    parser.add_argument('json_path', type=str)
     parser.add_argument('--no_renumber', action='store_true', default=False)
     parser.add_argument('-c', '--config', type=str, default='./configs/test/generate_multicdrs.yml')
     parser.add_argument('-o', '--out_root', type=str, default='./results/dataset')
